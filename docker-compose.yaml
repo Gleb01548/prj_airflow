@@ -44,7 +44,7 @@
 #
 # Feel free to modify this file to suit your needs.
 ---
-version: '3.8'
+version: '3.9'
 x-airflow-common:
   &airflow-common
   # In order to add custom dependencies or upgrade provider packages you can use your extended image.
@@ -100,6 +100,23 @@ services:
       interval: 10s
       retries: 5
       start_period: 5s
+    restart: always
+  
+  postgres_work:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/data/postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    ports:
+      - 5535:5432
     restart: always
 
   redis:
