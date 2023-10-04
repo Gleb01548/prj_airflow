@@ -103,13 +103,16 @@ services:
     restart: always
   
   postgres_work:
-    image: postgres:13
+    image: postgres:16
+    cpus: 8
+    mem_limit: 16g
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
     volumes:
       - ${AIRFLOW_PROJ_DIR:-.}/data/postgres_data:/var/lib/postgresql/data
+
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
       interval: 10s

@@ -26,7 +26,7 @@ dag = DAG(
 )
 
 
-def _get_data(output_path, **context):
+def _get_data(output_path, data_interval_start, data_interval_end, **context):
     year, month, day, hour, *_ = context["execution_date"].timetuple()
     url = (
         "https://dumps.wikimedia.org/other/pageviews/"
@@ -46,7 +46,7 @@ get_data = PythonOperator(
 
 
 extract_gz = BashOperator(
-    task_id="extract_gz", bash_command=f"gunzip --force {file_load_path}"
+    task_id="extract_gz", bash_command=f"gunzip --force {file_load_path}", dag=dag
 )
 
 
