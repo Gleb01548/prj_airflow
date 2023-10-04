@@ -14,12 +14,17 @@ dir_path = "/data/db_russian_wiki/"
 pathlib.Path(dir_path).mkdir(parents=True, exist_ok=True)
 
 
-load_data_script = "postgres_load_data.sql"
-write_data_to_table_page_name = "to_table_page_name.sql"
-write_data_to_stat_views = "to_stat_views.sql"
+script_load_res = "load_res.sql"
+script_write_table_page_name = "write_table_page_name.sql"
+script_write_stat_views = "write_stat_views.sql"
+# trancate_data_views = "truncate_data_views.sql"
 
 file_load_path = os.path.join(dir_path, "wikipageviews.gz")
-postgres_load_data = os.path.join(dir_path, load_data_script)
+
+path_script_load_data = os.path.join(dir_path, script_load_res)
+path_script_write_table_page_name = os.path.join(dir_path, script_write_table_page_name)
+path_script_write_stat_views = os.path.join(dir_path, script_write_stat_views)
+
 
 dag = DAG(
     dag_id="russian_wikipedia",
@@ -33,7 +38,7 @@ dag = DAG(
 
 
 def _get_data(output_path, **context):
-    year, month, day, hour, *_ = context["execution_date"].timetuple()
+    year, month, day, hour, *_ = context["data_interval_start"].timetuple()
     url = (
         "https://dumps.wikimedia.org/other/pageviews/"
         f"{year}/{year}-{month:0>2}/"
@@ -56,7 +61,11 @@ extract_gz = BashOperator(
 )
 
 
-def _fetch_pageviews(file_load_path, postgres_load_data, data_interval_start):
+def _fetch_pageviews(
+    file_load_path,
+    path_script_load_data,
+    data_interval_start,
+):
     result = {}
     with open(file_load_path, "r") as f:
         for line in f:
@@ -64,7 +73,7 @@ def _fetch_pageviews(file_load_path, postgres_load_data, data_interval_start):
             if domain_code == "ru":
                 result[page_title] = view_counts
 
-    with open(postgres_load_data, "w") as f:
+    with open(path_script_load_data, "w") as f:
         f.write(
             "insert into resource.data_views (page_name, page_view_count, datetime) values"
         )
@@ -82,40 +91,110 @@ fetch_pageviews = PythonOperator(
     task_id="fetch_pageviews",
     python_callable=_fetch_pageviews,
     op_kwargs={
-        # "pagenames": {"Google", "Amazon", "Apple", "Microsoft", "Facebook"},
-        "postgres_load_data": postgres_load_data,
         "file_load_path": file_load_path.removesuffix(".gz"),
+        "path_script_load_data": path_script_load_data,
     },
     dag=dag,
 )
 
-write_to_postgres = PostgresOperator(
-    task_id="write_to_postgres",
-    postgres_conn_id="russian_wiki",
-    sql="postgres_load_data.sql",
+
+def _make_script_write_table_page_name(
+    path_script_write_table_page_name, data_interval_start
+):
+    with open(path_script_write_table_page_name, "w") as f:
+        f.write(
+            f"""
+            with
+                table1 as (
+                    select
+                        page_name
+                    from
+                        resource.data_views
+                    where
+                        datetime = '{data_interval_start}'
+                )
+            insert into
+                wiki.table_page_name (page_name)
+            select distinct
+                dv.page_name
+            from
+                table1 as dv
+                left join wiki.table_page_name as tpn on dv.page_name = tpn.page_name
+            where
+                tpn.page_name is null;
+            """
+        )
+
+
+make_script_write_table_page_name = PythonOperator(
+    task_id="make_script_write_table_page_name",
+    python_callable=_make_script_write_table_page_name,
+    op_kwargs={"path_script_write_table_page_name": path_script_write_table_page_name},
     dag=dag,
 )
 
-write_to_table_page_name = PostgresOperator(
-    task_id="write_to_table_page_name",
-    postgres_conn_id="russian_wiki",
-    sql=write_data_to_table_page_name,
+
+def _make_script_write_stat_views(path_script_write_stat_views, data_interval_start):
+    with open(path_script_write_stat_views, "w") as f:
+        f.write(
+            f"""
+            with
+                table1 as (
+                    select
+                        page_name
+                    from
+                        resource.data_views
+                    where
+                        datetime = '{data_interval_start}'
+                )
+            insert into
+                wiki.stat_views (table_page_name_id, page_view_count, datetime)
+            select
+                tpn.table_page_name_id,
+                dv.page_view_count,
+                dv.datetime
+            from
+                resource.data_views as dv
+                left join wiki.table_page_name as tpn on dv.page_name = tpn.page_name
+                left join wiki.stat_views as sv on dv.datetime = sv.datetime
+                and tpn.table_page_name_id = sv.table_page_name_id
+            where
+                sv.table_page_name_id is null
+                and sv.datetime is null;
+            """
+        )
+
+
+make_script_write_stat_views = PythonOperator(
+    task_id="make_script_write_stat_views",
+    python_callable=_make_script_write_stat_views,
+    op_kwargs={"path_script_write_stat_views": path_script_write_stat_views},
     dag=dag,
 )
 
-write_to_stat_views = PostgresOperator(
-    task_id="write_to_stat_views",
+write_postgres = PostgresOperator(
+    task_id="load_res",
     postgres_conn_id="russian_wiki",
-    sql=write_data_to_stat_views,
+    sql=script_load_res,
+    dag=dag,
+)
+
+write_table_page_name = PostgresOperator(
+    task_id="write_table_page_name",
+    postgres_conn_id="russian_wiki",
+    sql=script_write_table_page_name,
+    dag=dag,
+)
+
+write_stat_views = PostgresOperator(
+    task_id="write_stat_views",
+    postgres_conn_id="russian_wiki",
+    sql=script_write_stat_views,
     dag=dag,
 )
 
 
-(
-    get_data
-    >> extract_gz
-    >> fetch_pageviews
-    >> write_to_postgres
-    >> write_to_table_page_name
-    >> write_to_stat_views
-)
+get_data >> extract_gz >> fetch_pageviews
+fetch_pageviews >> write_postgres
+[write_postgres, make_script_write_table_page_name] >> write_table_page_name
+[write_table_page_name, make_script_write_stat_views] >> write_stat_views
