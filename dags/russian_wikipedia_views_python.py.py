@@ -9,7 +9,12 @@ from airflow.operators.bash import BashOperator
 from airflow.utils.dates import days_ago
 from airflow.providers.postgres.operators.postgres import PostgresOperator
 
-default_args = {"wait_for_downstream": True}
+default_args = {
+    "wait_for_downstream": True,
+    "retries": 5,
+    "retry_delay": dt.timedelta(minutes=3),
+    "execution_timeout": dt.timedelta(minutes=60),
+}
 dir_path = "/data/db_russian_wiki/"
 pathlib.Path(dir_path).mkdir(parents=True, exist_ok=True)
 
@@ -141,7 +146,7 @@ def _make_script_write_stat_views(path_script_write_stat_views, data_interval_st
             with
                 table1 as (
                     select
-                        page_name
+                        page_name, page_view_count, datetime
                     from
                         resource.data_views
                     where
@@ -154,13 +159,8 @@ def _make_script_write_stat_views(path_script_write_stat_views, data_interval_st
                 dv.page_view_count,
                 dv.datetime
             from
-                resource.data_views as dv
+                table1 as dv
                 left join wiki.table_page_name as tpn on dv.page_name = tpn.page_name
-                left join wiki.stat_views as sv on dv.datetime = sv.datetime
-                and tpn.table_page_name_id = sv.table_page_name_id
-            where
-                sv.table_page_name_id is null
-                and sv.datetime is null;
             """
         )
 
