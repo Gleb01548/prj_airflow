@@ -18,22 +18,22 @@ default_args = {
 dir_path = "/data/db_russian_wiki/"
 pathlib.Path(dir_path).mkdir(parents=True, exist_ok=True)
 
-
 script_load_res = "load_res.sql"
 script_write_table_page_name = "write_table_page_name.sql"
 script_write_stat_views = "write_stat_views.sql"
-# trancate_data_views = "truncate_data_views.sql"
+script_delete_res = "delete_res.sql"
 
 file_load_path = os.path.join(dir_path, "wikipageviews.gz")
 
 path_script_load_data = os.path.join(dir_path, script_load_res)
 path_script_write_table_page_name = os.path.join(dir_path, script_write_table_page_name)
 path_script_write_stat_views = os.path.join(dir_path, script_write_stat_views)
+path_script_delete_res = os.path.join(dir_path, script_delete_res)
 
 
 dag = DAG(
     dag_id="russian_wikipedia",
-    start_date=dt.datetime(2023, 1, 1),
+    start_date=dt.datetime(2022, 1, 1),
     end_date=days_ago(1),
     schedule_interval="@hourly",
     tags=["russian_wikipedia"],
@@ -109,24 +109,24 @@ def _make_script_write_table_page_name(
     with open(path_script_write_table_page_name, "w") as f:
         f.write(
             f"""
-            with
-                table1 as (
-                    select
-                        page_name
-                    from
-                        resource.data_views
-                    where
-                        datetime = '{data_interval_start}'
-                )
-            insert into
-                wiki.table_page_name (page_name)
-            select distinct
-                dv.page_name
-            from
-                table1 as dv
-                left join wiki.table_page_name as tpn on dv.page_name = tpn.page_name
-            where
-                tpn.page_name is null;
+with
+    table1 as (
+        select
+            page_name
+        from
+            resource.data_views
+        where
+            datetime = '{data_interval_start}'
+    )
+insert into
+    wiki.table_page_name (page_name)
+select distinct
+    dv.page_name
+from
+    table1 as dv
+    left join wiki.table_page_name as tpn on dv.page_name = tpn.page_name
+where
+    tpn.page_name is null;
             """
         )
 
@@ -143,24 +143,24 @@ def _make_script_write_stat_views(path_script_write_stat_views, data_interval_st
     with open(path_script_write_stat_views, "w") as f:
         f.write(
             f"""
-            with
-                table1 as (
-                    select
-                        page_name, page_view_count, datetime
-                    from
-                        resource.data_views
-                    where
-                        datetime = '{data_interval_start}'
-                )
-            insert into
-                wiki.stat_views (table_page_name_id, page_view_count, datetime)
-            select
-                tpn.table_page_name_id,
-                dv.page_view_count,
-                dv.datetime
-            from
-                table1 as dv
-                left join wiki.table_page_name as tpn on dv.page_name = tpn.page_name
+with
+    table1 as (
+        select
+            page_name, page_view_count, datetime
+        from
+            resource.data_views
+        where
+            datetime = '{data_interval_start}'
+    )
+insert into
+    wiki.stat_views (table_page_name_id, page_view_count, datetime)
+select
+    tpn.table_page_name_id,
+    dv.page_view_count,
+    dv.datetime
+from
+    table1 as dv
+    left join wiki.table_page_name as tpn on dv.page_name = tpn.page_name
             """
         )
 
@@ -171,6 +171,24 @@ make_script_write_stat_views = PythonOperator(
     op_kwargs={"path_script_write_stat_views": path_script_write_stat_views},
     dag=dag,
 )
+
+
+def _make_script_del_res(path_script_delete_res, data_interval_start):
+    with open(path_script_delete_res, "w") as f:
+        f.write(
+            f"""
+DELETE FROM resource.data_views WHERE datetime = '{data_interval_start}';
+            """
+        )
+
+
+make_script_del_res = PythonOperator(
+    task_id="make_script_del_res",
+    python_callable=_make_script_del_res,
+    op_kwargs={"path_script_delete_res": path_script_delete_res},
+    dag=dag,
+)
+
 
 write_postgres = PostgresOperator(
     task_id="load_res",
@@ -193,8 +211,17 @@ write_stat_views = PostgresOperator(
     dag=dag,
 )
 
+delete_res = PostgresOperator(
+    task_id="delet_res",
+    postgres_conn_id="russian_wiki",
+    sql=script_delete_res,
+    dag=dag,
+)
+
 
 get_data >> extract_gz >> fetch_pageviews
 fetch_pageviews >> write_postgres
 [write_postgres, make_script_write_table_page_name] >> write_table_page_name
 [write_table_page_name, make_script_write_stat_views] >> write_stat_views
+make_script_del_res >> delete_res
+write_stat_views >> delete_res
