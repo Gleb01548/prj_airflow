@@ -4,3 +4,4 @@ logs/*
 dags/__pycache__
 config/__pycache__
 notebooks
+dags/__pycache__
